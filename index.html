@@ -208,6 +208,22 @@
     text-align:start;vertical-align:top;line-height:1.45}
   table.lt thead th{background:var(--sunk);font-weight:700;font-size:.78rem}
   table.lt td{font-variant-numeric:tabular-nums}
+
+  .ask{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;padding:.45rem .95rem;
+    border-top:1px solid var(--rule-soft);background:var(--surface);font-size:.82rem;
+    color:var(--muted)}
+  .ask .yn{font-family:var(--mono);font-size:.74rem;padding:.16rem .7rem;
+    border:1px solid var(--rule);background:var(--paper);border-radius:2px;cursor:pointer}
+  .ask .yn:hover:not(:disabled){border-color:var(--accent);color:var(--accent)}
+  .ask .yn:disabled{opacity:.4;cursor:default}
+  .thanks{font-size:.78rem;color:var(--accent)}
+  .miss{display:flex;gap:.4rem;align-items:center;flex-wrap:wrap;margin:.6rem 0 0}
+  .miss input{flex:1 1 220px;min-width:0;font:inherit;font-size:.9rem;padding:.35rem .6rem;
+    border:1px solid var(--rule);background:var(--paper);color:var(--ink);border-radius:2px}
+  .miss button{font-family:var(--mono);font-size:.74rem;padding:.35rem .8rem;
+    border:1px solid var(--rule);background:var(--surface);border-radius:2px;cursor:pointer}
+  .miss button:hover:not(:disabled){border-color:var(--accent);color:var(--accent)}
+  .miss button:disabled{opacity:.4;cursor:default}
 </style>
 
 <header>
@@ -232,15 +248,21 @@
 <footer>
   <div class="fbrow">
     <span>הכלי בפיתוח — כל חיפוש שלכם משפר אותו.</span>
-    <button id="fb-wa">חיפשתי ולא מצאתי — דווח</button>
-    <button id="fb-export">ייצוא יומן החיפושים שלי</button>
+    <button id="fb-wa">חיפשתי ולא מצאתי — כתבו לי</button>
+    <button id="fb-export">ייצוא היומן שלי</button>
+    <button id="fb-optout"></button>
   </div>
   <div class="legal">
     כלי עזר להתמצאות בחקיקת התכנון והבנייה. אינו ייעוץ משפטי ואינו תחליף לבדיקת הנוסח
     המחייב ברשומות. נוסחי החקיקה מבוססים על המהדורות המוגהות של
     <b>ויקיטקסט</b> (he.wikisource.org), רישיון CC BY-SA, נכון לאוגוסט 2026 — ייתכנו תיקוני
-    דין מאוחרים יותר. יומן החיפושים נשמר במכשיר שלך בלבד ואינו נשלח לשום מקום; כפתורי
-    הדיווח והייצוא הם הדרך היחידה לשתף אותו איתנו.
+    דין מאוחרים יותר.
+    <br><br>
+    <b>מה נאסף.</b> כדי לשפר את החיפוש נרשמים: הטקסט שחיפשתם, כמה תוצאות הוחזרו, ומה
+    עשיתם עם התשובה (העתקתם ציטוט, פתחתם סעיף, סימנתם "כן" או "לא"). <b>לא</b> נאספים
+    שם, אימייל, טלפון או כל מזהה אישי, ואין עוגיות מעקב. לכל דפדפן נוצר מזהה אקראי
+    קצר, רק כדי לדעת ששני חיפושים באו מאותו ביקור. אפשר לכבות את השיתוף בכפתור למעלה,
+    וגם לייצא את היומן ולראות בדיוק מה נשמר.
   </div>
 </footer>
 
@@ -395,18 +417,120 @@ function idf(tok){
 // סעיפי שלד — הגדרות, תחילה, ביטול. כמעט אף פעם לא התשובה לשאלה מקצועית.
 var BOILER = /^(הגדר|פרשנ|תחיל|ביטול|השם|תחול|מטרה|שמיר|הוראות מעבר|הוראת שעה|תיקון|פרסום|עונשין|דין הוראות|סייג|תוקף)/;
 
-/* ---------- יומן שאילתות מקומי ---------- */
-var QLOG_KEY = 'law-db-qlog-v1';
-function qlog(entry){
+/* ---------- שכבת הלמידה ----------
+   שאילתה בודדת לא מלמדת כלום. מה שמלמד הוא האפיזודה: אדם מנסח שאלה,
+   מנסח אותה מחדש, ואז או שהוא פועל על התשובה או שהוא מוותר. הרצף הזה
+   הוא שאומר אם הכלי ענה לו. כאן נמדדות שתי שכבות אות:
+   מפורש  — לחיצה על "כן/לא" בכרטיס התשובה.
+   משתמע  — העתקת ציטוט, פתיחת הנוסח, מעבר לוויקיטקסט (הצליח);
+            ניסוח מחדש תוך 45 שניות, אפס תוצאות, יציאה מהירה (נכשל). */
+
+var COLLECT_URL = '';        // ריק = שום דבר לא יוצא מהמכשיר. ראו הוראות ההפעלה.
+var LOG_KEY = 'law-db-log-v2';
+var PEND_KEY = 'law-db-pending-v2';
+var OPTOUT_KEY = 'law-db-optout';
+var SID = (function(){
   try {
-    var log = JSON.parse(localStorage.getItem(QLOG_KEY) || '[]');
-    entry.ts = new Date().toISOString();
-    log.push(entry);
-    if (log.length > 4000) log = log.slice(-4000);
-    localStorage.setItem(QLOG_KEY, JSON.stringify(log));
+    var k = 'law-db-sid', v = localStorage.getItem(k);
+    if (!v) { v = Math.random().toString(36).slice(2, 10); localStorage.setItem(k, v); }
+    return v;
+  } catch (e) { return 'x'; }
+})();
+function optedOut(){ try { return localStorage.getItem(OPTOUT_KEY) === '1'; } catch (e) { return true; } }
+function readArr(k){ try { return JSON.parse(localStorage.getItem(k) || '[]'); } catch (e) { return []; } }
+function writeArr(k, v){ try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
+
+var ep = null, lastQ = '', lastR = null;
+
+function pushRow(row){
+  row.sid = SID;
+  row.ts = new Date().toISOString();
+  var log = readArr(LOG_KEY); log.push(row);
+  if (log.length > 3000) log = log.slice(-3000);
+  writeArr(LOG_KEY, log);
+  if (!optedOut()) {
+    var pend = readArr(PEND_KEY); pend.push(row);
+    if (pend.length > 300) pend = pend.slice(-300);
+    writeArr(PEND_KEY, pend);
+    if (pend.length >= 8) flush(false);
+  }
+}
+
+// מה קרה בפועל: קודם האות המפורש, ואם אין — מה שאפשר להסיק מההתנהגות
+function verdict(e, why){
+  if (e.yn === 1) return 'ענה';
+  if (e.yn === 0) return 'לא ענה';
+  if (!e.n) return 'אפס תוצאות';
+  for (var i = 0; i < e.a.length; i++)
+    if (['ציטוט', 'ויקיטקסט', 'סעיף', 'נוסח מלא'].indexOf(e.a[i]) > -1) return 'ענה';
+  if (why === 'ניסוח מחדש') return 'ניסח מחדש';
+  if (e.a.length) return 'עיין';
+  return (Date.now() - e.t0) > 8000 ? 'קרא ולא פעל' : 'נטש';
+}
+
+function closeEp(why){
+  if (!ep) return;
+  var e = ep; ep = null;
+  pushRow({ k: 'שאילתה', q: e.q, chain: e.chain.slice(0, 6), n: e.n, need: e.need,
+            kt: e.kt, ans: e.ans, law: e.law, cl: e.cl, acts: e.a,
+            sec: Math.round((Date.now() - e.t0) / 1000), out: verdict(e, why), why: why });
+}
+
+// שני חיפושים רצופים שחולקים מילה הם אותה שאלה שנוסחה מחדש — כלומר הראשון נכשל
+function sameNeed(a, b){
+  var A = toks(a), B = toks(b);
+  for (var i = 0; i < A.length; i++)
+    for (var j = 0; j < B.length; j++)
+      if (A[i] === B[j] || A[i].indexOf(B[j]) === 0 || B[j].indexOf(A[i]) === 0) return true;
+  return false;
+}
+
+function noteSearch(q, r, top){
+  if (ep && ep.q === q) return;
+  var chain = [];
+  if (ep) {
+    var re = (Date.now() - ep.t0) < 45000 && sameNeed(ep.q, q);
+    chain = ep.chain.concat([ep.q]);
+    closeEp(re ? 'ניסוח מחדש' : 'שאלה חדשה');
+    if (!re) chain = [];
+  }
+  ep = { q: q, chain: chain, t0: Date.now(), a: [], yn: null,
+         n: r.hits.length, need: r.need, kt: (r.kt || []).join(' '),
+         ans: r.bridge ? (r.bridge.ans ? 'מאומתת' : 'גשר') : 'סעיף',
+         law: top ? top.l : '', cl: top ? top.s : '' };
+}
+function act(kind){ if (ep && ep.a.indexOf(kind) < 0) ep.a.push(kind); }
+function answered(v){
+  if (!ep) return;
+  ep.yn = v;
+  pushRow({ k: 'משוב', q: ep.q, yn: v, n: ep.n, ans: ep.ans, law: ep.law, cl: ep.cl });
+}
+function missReport(txt){
+  pushRow({ k: 'לא נמצא', q: (ep && ep.q) || lastQ, said: String(txt).slice(0, 300),
+            n: ep ? ep.n : -1 });
+}
+
+function flush(final){
+  var pend = readArr(PEND_KEY);
+  if (!COLLECT_URL || optedOut() || !pend.length) return;
+  var body = JSON.stringify({ v: 2, sid: SID, rows: pend });
+  try {
+    if (final && navigator.sendBeacon) {
+      if (navigator.sendBeacon(COLLECT_URL, body)) writeArr(PEND_KEY, []);
+    } else {
+      fetch(COLLECT_URL, { method: 'POST', mode: 'no-cors', keepalive: true,
+                           headers: { 'Content-Type': 'text/plain;charset=UTF-8' }, body: body })
+        .then(function(){ writeArr(PEND_KEY, []); }).catch(function(){});
+    }
   } catch (e) {}
 }
-var lastQ = '';
+window.addEventListener('pagehide', function(){ closeEp('יציאה'); flush(true); });
+document.addEventListener('visibilitychange', function(){
+  if (document.visibilityState === 'hidden') { closeEp('יציאה'); flush(true); }
+});
+
+// תאימות לקריאות הישנות
+function qlog(){}
 
 /* ---------- ציטוט ---------- */
 // מספר סעיף חוזר בתוך אותו חיקוק (תוספות שונות), עד שבע פעמים. ציטוט בלי
@@ -688,9 +812,13 @@ function answerBox(c, ansText, verified){
     '<div class="src"><span>המקור: ' + esc(citeLaw(c)) + '</span>' +
     (l.url ? '<a href="' + esc(l.url) + '" target="_blank" rel="noopener">לנוסח המלא בוויקיטקסט</a>' : '') +
     '</div>' +
-    (ansText ? '<div class="lawb"><details class="inline"><summary>נוסח הסעיף המלא</summary><div>' +
+    (ansText ? '<div class="lawb"><details class="inline" id="fulltext"><summary>נוסח הסעיף המלא</summary><div>' +
       esc(c.x) + '</div></details></div>' : '') +
-    citeBox(citeLaw(c)) + '</div>';
+    citeBox(citeLaw(c)) +
+    '<div class="ask"><span>מצאת מה שחיפשת?</span>' +
+    '<button class="yn" data-yn="1">כן</button>' +
+    '<button class="yn" data-yn="0">לא</button>' +
+    '<span class="thanks" id="thanks"></span></div></div>';
 }
 
 function render(){
@@ -698,11 +826,14 @@ function render(){
   if (s.length < 2) { home(); return; }
   var r = search(s), out = '';
 
+  lastQ = s; lastR = r;
   if (!r.hits.length) {
-    qlog({ q: s, hit: false, n: 0 });
     main.innerHTML = '<div class="empty"><b>לא נמצאה התאמה.</b><br>' +
       'נסה מילה נרדפת או את שם העצם לבדו — "מצללה" במקום "קירוי לפרגולה". ' +
-      'ואם עדיין אין — לחץ למטה על "חיפשתי ולא מצאתי": כך בדיוק הכלי לומד.<br><br><div>' +
+      'ואם עדיין אין — כתוב לי כאן במילים שלך מה חיפשת. זה מה שמלמד את הכלי.' +
+      '<div class="miss"><input id="missq" type="text" placeholder="מה חיפשת?" ' +
+      'autocomplete="off"><button id="misssend">שלח</button>' +
+      '<span class="thanks" id="missok"></span></div><br><div>' +
       D.samples.slice(0, 10).map(function(q2){
         return '<button class="try" data-q="' + esc(q2) + '">' + esc(q2) + '</button>'; }).join('') +
       '</div></div>';
@@ -762,9 +893,7 @@ function render(){
     out += '</section>';
   }
 
-  lastQ = s;
   setHash('#/q/' + encodeURIComponent(s));
-  qlog({ q: s, hit: true, n: r.hits.length, need: r.need, tk: r.tk.length, br: !!r.bridge });
   main.innerHTML = out;
   wire();
   window.scrollTo({ top: 0 });
@@ -775,7 +904,7 @@ function openClause(i){
   if (!c) return;
   var l = LAW[c.l] || {};
   setHash(clauseHash(i));
-  qlog({ q: lastQ, open: c.l + '|' + c.s });
+  act('סעיף');
   main.innerHTML = '<div class="pagehead"><span class="folio">' + esc(c.s) + '</span>' +
     '<span class="ch">' + esc(c.t) + '</span></div>' +
     '<p class="what">' + esc(l.full || l.n) + (c.p ? ' · ' + esc(c.p) : '') + '</p>' +
@@ -855,7 +984,7 @@ function wire(){
     b.onclick = function(ev){
       ev.stopPropagation();
       if (navigator.clipboard) navigator.clipboard.writeText(b.dataset.c);
-      qlog({q: lastQ, copy: b.dataset.c.slice(0, 80)});
+      act(b.dataset.c.indexOf('http') === 0 ? 'קישור' : 'ציטוט');
       var old = b.textContent;
       b.textContent = 'הועתק';
       setTimeout(function(){ b.textContent = old; }, 1400);
@@ -865,6 +994,27 @@ function wire(){
     if (b.id === 'shuffle') return;
     b.onclick = function(){ qEl.value = b.dataset.q; toggleClear(); render(); };
   });
+  main.querySelectorAll('button.yn').forEach(function(b){
+    b.onclick = function(){
+      answered(parseInt(b.dataset.yn, 10));
+      var th = document.getElementById('thanks');
+      if (th) th.textContent = b.dataset.yn === '1' ? 'תודה, נרשם.' : 'נרשם. אשפר את זה.';
+      main.querySelectorAll('button.yn').forEach(function(x){ x.disabled = true; });
+    };
+  });
+  main.querySelectorAll('a[href*="wikisource"]').forEach(function(a){
+    a.addEventListener('click', function(){ act('ויקיטקסט'); });
+  });
+  var ft = document.getElementById('fulltext');
+  if (ft) ft.addEventListener('toggle', function(){ if (ft.open) act('נוסח מלא'); });
+  var ms = document.getElementById('misssend');
+  if (ms) ms.onclick = function(){
+    var v = (document.getElementById('missq') || {}).value || '';
+    if (!v.trim()) return;
+    missReport(v);
+    document.getElementById('missok').textContent = 'נרשם. תודה.';
+    ms.disabled = true;
+  };
   main.querySelectorAll('[data-i]').forEach(function(b){
     b.onclick = function(){ openClause(parseInt(b.dataset.i, 10)); };
   });
@@ -878,9 +1028,16 @@ function wire(){
 function toggleClear(){
   document.getElementById('clear').style.display = qEl.value ? 'block' : 'none';
 }
+var settle;
 qEl.addEventListener('input', function(){
   toggleClear();
   clearTimeout(t); t = setTimeout(render, 130);
+  // רק שאילתה שהמשתמש הפסיק להקליד בה נחשבת שאלה. אחרת כל תו הוא "חיפוש".
+  clearTimeout(settle);
+  settle = setTimeout(function(){
+    var q = qEl.value.trim();
+    if (q.length >= 2 && lastR) noteSearch(q, lastR, lastR.hits[0] && lastR.hits[0].c);
+  }, 1100);
 });
 document.getElementById('clear').onclick = function(){
   qEl.value = ''; toggleClear(); render(); qEl.focus();
@@ -888,11 +1045,21 @@ document.getElementById('clear').onclick = function(){
 
 document.getElementById('fb-wa').onclick = function(){
   var msg = 'חיפשתי במאגר תחיקת הבנייה ולא מצאתי: "' + (lastQ || '') + '"';
-  qlog({q: lastQ, fb: 'wa'});
+  missReport('פנייה בוואטסאפ');
   window.open('https://wa.me/' + CONTACT_WA + '?text=' + encodeURIComponent(msg), '_blank');
 };
+var ob = document.getElementById('fb-optout');
+function drawOptout(){
+  ob.textContent = optedOut() ? 'שיתוף כבוי — הפעל' : 'כבה שיתוף חיפושים';
+}
+ob.onclick = function(){
+  try { localStorage.setItem(OPTOUT_KEY, optedOut() ? '0' : '1'); } catch (e) {}
+  if (optedOut()) writeArr(PEND_KEY, []);
+  drawOptout();
+};
+drawOptout();
 document.getElementById('fb-export').onclick = function(){
-  var log = localStorage.getItem(QLOG_KEY) || '[]';
+  var log = JSON.stringify(readArr(LOG_KEY), null, 1);
   var b = document.getElementById('fb-export');
   if (window.claude && window.claude.downloads) {
     window.claude.downloads.save({filename: 'law-search-log.json', data: log}).catch(function(){});
